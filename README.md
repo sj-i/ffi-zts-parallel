@@ -57,17 +57,45 @@ Parallel::boot()
     ->runScript(__DIR__ . '/worker.php');
 ```
 
-Where `worker.php` runs inside the embedded ZTS interpreter and
-uses `parallel\Runtime` directly:
+A minimal `worker.php` that fans out four `parallel\Runtime`s inside
+the embed:
 
 ```php
 <?php
-$rt = new parallel\Runtime();
-$f  = $rt->run(function () {
-    return 'hello from thread ' . zend_thread_id();
-});
-echo $f->value(), "\n";
+$futures = [];
+for ($i = 0; $i < 4; $i++) {
+    $rt        = new parallel\Runtime();
+    $futures[] = $rt->run(function (int $id): array {
+        $sum = 0;
+        for ($j = 0; $j < 2_000_000; $j++) $sum += $j;
+        return ['id' => $id, 'pid' => getmypid(), 'zts' => PHP_ZTS, 'sum' => $sum];
+    }, [$i]);
+}
+foreach ($futures as $f) {
+    print_r($f->value());
+}
 ```
+
+All four workers report the same `pid` (same process) and
+`zts=true` (running in the embedded ZTS interpreter).
+
+### opcache.preload (2.x / PHP 8.5)
+
+PHP 8.5 links opcache statically into `libphp.so`, so
+`opcache.preload` works under the embed out of the box and the
+preloaded classes / functions propagate into every
+`parallel\Runtime` worker thread:
+
+```php
+Parallel::boot()
+    ->withIniEntry('opcache.enable_cli',  '1')
+    ->withIniEntry('opcache.preload',     __DIR__ . '/preload.php')
+    ->withIniEntry('opcache.preload_user', get_current_user())
+    ->runScript(__DIR__ . '/worker.php');
+```
+
+See [`docs/PERFORMANCE.md`](https://github.com/sj-i/ffi-zts/blob/main/docs/PERFORMANCE.md)
+in the core repo for fork-vs-embed measurements.
 
 ### Read-only / containerised environments
 
@@ -82,16 +110,22 @@ Parallel::bootInMemory()->runScript('worker.php');
 
 ## Versioning
 
-- `ffi-zts-parallel` major tracks the PHP minor (1.x = PHP 8.4).
-- Minor / patch tracks upstream `parallel` releases plus wrapper
-  fixes; bumping just the parallel version is
-  `composer update sj-i/ffi-zts-parallel`.
+Major tracks the host PHP minor:
+
+- `ffi-zts-parallel` **1.x** targets **PHP 8.4** (host NTS / embedded ZTS).
+- `ffi-zts-parallel` **2.x** targets **PHP 8.5** and picks up
+  upstream's static opcache for out-of-box `opcache.preload`.
+
+Minor / patch tracks upstream `parallel` releases plus wrapper
+fixes; bumping just the parallel version is
+`composer update sj-i/ffi-zts-parallel`.
 
 ## Requirements
 
 - Linux x86_64 or aarch64, glibc 2.31+
-- NTS PHP 8.4 (the host) with `ext-ffi` enabled
+- Host NTS PHP matching the major you install -- **1.x needs
+  PHP 8.4**, **2.x needs PHP 8.5** -- with `ext-ffi` enabled
 - Composer 2.2+
 
-macOS, Windows, and musl are out of scope for the 1.x line; see the
-design doc for why.
+macOS, Windows, and musl are out of scope for the currently
+supported major lines; see the design doc for why.
