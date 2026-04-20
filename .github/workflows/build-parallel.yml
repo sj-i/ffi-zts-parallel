@@ -120,7 +120,12 @@ jobs:
           # parallel.so at root acts as the install marker the
           # Installer hook checks for.
           cp out/extensions/ffi-zts/parallel.so out/parallel.so
-          tar czf "$asset" -C out .
+          # List the packed paths explicitly instead of `.` so the
+          # tarball has no leading "./" entries - PharData::extractTo
+          # refuses to extract the "." pseudo-entry and fails the
+          # post-install plugin with "Cannot extract '.', internal
+          # error" otherwise.
+          tar czf "$asset" -C out extensions parallel.so
           echo "asset=$asset" >> "$GITHUB_OUTPUT"
 
       - name: Upload as workflow artifact
