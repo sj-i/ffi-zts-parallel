@@ -43,32 +43,17 @@ jobs:
       matrix:
         php: ['8.4']
     steps:
-      - name: Checkout ffi-zts-parallel
-        uses: actions/checkout@v4
-        with:
-          path: parallel
-      - name: Checkout ffi-zts (sibling)
-        uses: actions/checkout@v4
-        with:
-          repository: sj-i/ffi-zts
-          ref: main
-          path: ffi-zts
+      - uses: actions/checkout@v4
       - uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php }}
           extensions: ffi
           coverage: none
           tools: composer:v2
-      - name: Wire local sj-i/ffi-zts as a path repository
-        working-directory: parallel
-        run: |
-          composer config minimum-stability dev
-          composer config repositories.ffi-zts path ../ffi-zts
+      # sj-i/ffi-zts is resolved from Packagist; no path-repo hack.
       - name: Install dependencies
-        working-directory: parallel
         run: composer install --no-scripts --no-interaction --prefer-dist
       - name: Run PHPUnit (skipped if no tests yet)
-        working-directory: parallel
         run: |
           if [ -f phpunit.xml ] || [ -f phpunit.xml.dist ]; then
               vendor/bin/phpunit --colors=always
