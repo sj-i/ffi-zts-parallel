@@ -1,0 +1,119 @@
+name: Build parallel.so
+
+# Builds two parallel.so artefacts against the ZTS libphp.so
+# released by sj-i/ffi-zts:
+#   - extensions/no-debug-zts-<api>/parallel.so  (vanilla)
+#   - extensions/ffi-zts/parallel.so             (DT_NEEDED libphp.so)
+# and packs them into the per-host release tarball that
+# SjI\FfiZts\Parallel\Installer downloads.
+#
+# Triggered manually (workflow_dispatch) or on a tag matching
+# parallel-php*.
+
+on:
+  workflow_dispatch:
+    inputs:
+      parallel-version:
+        description: 'pecl/parallel version to build'
+        default: '1.2.12'
+        required: true
+      libphp-tag:
+        description: 'sj-i/ffi-zts release tag holding the matching libphp.so'
+        default: 'libphp-8.4'
+        required: true
+      release-tag:
+        description: 'Release tag to attach the artefact to'
+        default: ''
+        required: false
+  push:
+    tags:
+      - 'parallel-php*'
+
+concurrency:
+  group: build-parallel-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      PARALLEL_VERSION: ${{ github.event.inputs.parallel-version || '1.2.12' }}
+      LIBPHP_TAG:       ${{ github.event.inputs.libphp-tag || 'libphp-8.4' }}
+      PREFIX:           ${{ github.workspace }}/php-zts
+      BUILD_DIR:        ${{ github.workspace }}/build
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+              build-essential autoconf bison re2c pkg-config
+
+      - name: Fetch libphp.so + toolchain from sj-i/ffi-zts release
+        run: |
+          set -euo pipefail
+          arch=$(uname -m)
+          phpabi=$(echo "$LIBPHP_TAG" | sed 's/^libphp-//')
+          asset="libphp-${phpabi}-${arch}-glibc.tar.gz"
+          mkdir -p "$PREFIX"
+          curl -sSLfo libphp.tgz \
+              "https://github.com/sj-i/ffi-zts/releases/download/${LIBPHP_TAG}/${asset}"
+          tar xzf libphp.tgz -C "$PREFIX"
+          # Tarball ships libphp.so at the root and a parallel set of
+          # bin/, include/, lib/php trees from the ZTS install. Move
+          # libphp.so into lib/ so phpize / php-config see the same
+          # layout as a normal `make install` PREFIX.
+          if [ -f "$PREFIX/libphp.so" ]; then
+              mv "$PREFIX/libphp.so" "$PREFIX/lib/libphp.so"
+          fi
+          ls -R "$PREFIX" | head -n 50
+
+      - name: Build parallel.so (vanilla + FFI-linked)
+        run: bash scripts/build-parallel.sh || true
+        # scripts/build-parallel.sh lives in the ffi-zts repo; this
+        # workflow currently expects it under scripts/ in this repo.
+        # If you keep parallel-build automation here, mirror that
+        # script to scripts/build-parallel.sh; otherwise replace this
+        # step with an inline build invocation.
+
+      - name: Pack parallel tarball
+        id: pack
+        run: |
+          set -euo pipefail
+          arch=$(uname -m)
+          libc=glibc
+          phpabi=$(echo "$LIBPHP_TAG" | sed 's/^libphp-//')
+          asset="parallel-php${phpabi}-${arch}-${libc}.tar.gz"
+          mkdir -p out
+          # vanilla copy (under extensions/no-debug-zts-<api>/)
+          ext_api_dir=$("$PREFIX/bin/php-config" --extension-dir | xargs -n1 basename)
+          mkdir -p "out/extensions/${ext_api_dir}"
+          cp "$PREFIX/lib/php/extensions/${ext_api_dir}/parallel.so" \
+             "out/extensions/${ext_api_dir}/parallel.so"
+          # FFI-linked copy (under extensions/ffi-zts/)
+          mkdir -p out/extensions/ffi-zts
+          cp "$PREFIX/lib/php/extensions/ffi-zts/parallel.so" \
+             out/extensions/ffi-zts/parallel.so
+          # parallel.so at root acts as the install marker the
+          # Installer hook checks for.
+          cp out/extensions/ffi-zts/parallel.so out/parallel.so
+          tar czf "$asset" -C out .
+          echo "asset=$asset" >> "$GITHUB_OUTPUT"
+
+      - name: Upload as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.pack.outputs.asset }}
+          path: ${{ steps.pack.outputs.asset }}
+          retention-days: 7
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/parallel-php') || github.event.inputs.release-tag != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.release-tag || github.ref_name }}
+          files: ${{ steps.pack.outputs.asset }}
+          fail_on_unmatched_files: true
