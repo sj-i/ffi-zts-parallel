@@ -54,7 +54,7 @@ jobs:
 
       - name: Fetch libphp.so + toolchain from sj-i/ffi-zts release
         run: |
-          set -euo pipefail
+          set -euxo pipefail
           arch=$(uname -m)
           phpabi=$(echo "$LIBPHP_TAG" | sed 's/^libphp-//')
           asset="libphp-${phpabi}-${arch}-glibc.tar.gz"
@@ -69,7 +69,15 @@ jobs:
           if [ -f "$PREFIX/libphp.so" ]; then
               mv "$PREFIX/libphp.so" "$PREFIX/lib/libphp.so"
           fi
-          ls -R "$PREFIX" | head -n 50
+          # Sanity-check the extracted toolchain. `ls -R | head` under
+          # `set -o pipefail` drops out of the middle of ls's output,
+          # trips SIGPIPE, and fails the step. Dump to a file, then
+          # head a capped copy.
+          ls -R "$PREFIX" > /tmp/prefix.ls
+          head -n 50 /tmp/prefix.ls
+          test -x "$PREFIX/bin/php-config"
+          test -x "$PREFIX/bin/phpize"
+          test -f "$PREFIX/lib/libphp.so"
 
       - name: Build parallel.so (vanilla + FFI-linked)
         run: bash scripts/build-parallel.sh
