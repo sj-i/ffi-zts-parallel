@@ -41,8 +41,15 @@ jobs:
     env:
       PARALLEL_VERSION: ${{ github.event.inputs.parallel-version || '1.2.12' }}
       LIBPHP_TAG:       ${{ github.event.inputs.libphp-tag || 'libphp-8.4' }}
-      PREFIX:           ${{ github.workspace }}/php-zts
-      BUILD_DIR:        ${{ github.workspace }}/build
+      # libphp.so in sj-i/ffi-zts was configured with
+      # --prefix=/home/runner/work/ffi-zts/ffi-zts/php-zts, and
+      # `phpize` / `php-config` have that path baked in (phpize's
+      # first check is that $prefix/include/php/main/php.h exists).
+      # Reproduce the same directory tree here so the hardcoded
+      # lookups resolve. `/home/runner/work/` is runner-writable on
+      # GitHub-hosted ubuntu runners, so no sudo is needed.
+      PREFIX:    /home/runner/work/ffi-zts/ffi-zts/php-zts
+      BUILD_DIR: ${{ github.workspace }}/build
     steps:
       - uses: actions/checkout@v4
 
@@ -78,6 +85,11 @@ jobs:
           test -x "$PREFIX/bin/php-config"
           test -x "$PREFIX/bin/phpize"
           test -f "$PREFIX/lib/libphp.so"
+          # Confirm phpize's hardcoded prefix resolves and its first
+          # header is reachable - if not, the subsequent build-
+          # parallel.sh exits silently at the phpize invocation.
+          test "$("$PREFIX/bin/php-config" --prefix)" = "$PREFIX"
+          test -f "$PREFIX/include/php/main/php.h"
 
       - name: Build parallel.so (vanilla + FFI-linked)
         # `bash -x` traces every command to the job log. The mirrored
