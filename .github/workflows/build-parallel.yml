@@ -80,7 +80,12 @@ jobs:
           test -f "$PREFIX/lib/libphp.so"
 
       - name: Build parallel.so (vanilla + FFI-linked)
-        run: bash scripts/build-parallel.sh
+        # `bash -x` traces every command to the job log. The mirrored
+        # build-parallel.sh redirects a lot of output to /dev/null for
+        # cleanliness on a dev box; without xtrace the job log is
+        # nearly empty when the script exits non-zero, and we can't
+        # tell which step failed.
+        run: bash -x scripts/build-parallel.sh
 
       - name: Pack parallel tarball
         id: pack
