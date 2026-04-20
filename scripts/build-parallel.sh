@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build pecl/parallel twice for the ZTS PHP in $PREFIX:
-#   1) vanilla build  -> extensions/no-debug-zts-20240924/parallel.so
+#   1) vanilla build  -> extensions/no-debug-zts-<api>/parallel.so
 #      (usable from the native ZTS CLI)
 #   2) FFI-linked build -> extensions/ffi-zts/parallel.so
 #      (linked against libphp.so so that, when dlopen'd inside an NTS

@@ -19,7 +19,7 @@ on:
         required: true
       libphp-tag:
         description: 'sj-i/ffi-zts release tag holding the matching libphp.so'
-        default: 'libphp-8.4'
+        default: 'libphp-8.5'
         required: true
       release-tag:
         description: 'Release tag to attach the artefact to'
@@ -40,7 +40,7 @@ jobs:
       contents: write
     env:
       PARALLEL_VERSION: ${{ github.event.inputs.parallel-version || '1.2.12' }}
-      LIBPHP_TAG:       ${{ github.event.inputs.libphp-tag || 'libphp-8.4' }}
+      LIBPHP_TAG:       ${{ github.event.inputs.libphp-tag || 'libphp-8.5' }}
       # libphp.so in sj-i/ffi-zts was configured with
       # --prefix=/home/runner/work/ffi-zts/ffi-zts/php-zts, and
       # `phpize` / `php-config` have that path baked in (phpize's

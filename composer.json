@@ -8,10 +8,10 @@
         {"name": "sj-i"}
     ],
     "require": {
-        "php": ">=8.4,<8.5",
+        "php": ">=8.5,<8.6",
         "composer-plugin-api": "^2.0",
         "ext-ffi": "*",
-        "sj-i/ffi-zts": "^1.1"
+        "sj-i/ffi-zts": "^2.0"
     },
     "require-dev": {
         "composer/composer": "^2.0",
