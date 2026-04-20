@@ -72,12 +72,7 @@ jobs:
           ls -R "$PREFIX" | head -n 50
 
       - name: Build parallel.so (vanilla + FFI-linked)
-        run: bash scripts/build-parallel.sh || true
-        # scripts/build-parallel.sh lives in the ffi-zts repo; this
-        # workflow currently expects it under scripts/ in this repo.
-        # If you keep parallel-build automation here, mirror that
-        # script to scripts/build-parallel.sh; otherwise replace this
-        # step with an inline build invocation.
+        run: bash scripts/build-parallel.sh
 
       - name: Pack parallel tarball
         id: pack
