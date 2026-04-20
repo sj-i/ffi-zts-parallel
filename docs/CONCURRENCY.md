@@ -1,6 +1,6 @@
 # ffi-zts-parallel concurrency design
 
-Status: **Draft** -- satellite-specific design for the
+Status: **Draft** -- satellite-specific design sketch for the
 cross-thread concurrency primitives (channels, pool, structured
 combinators, atomics). The overarching design, zero-copy payload
 mechanism, safety model, and naming discipline live in the core
@@ -13,16 +13,23 @@ package:
 - [`ffi-zts` docs/concurrency/ecosystem.md](https://github.com/sj-i/ffi-zts/blob/main/docs/concurrency/ecosystem.md)
 - [`ffi-zts` docs/concurrency/limits.md](https://github.com/sj-i/ffi-zts/blob/main/docs/concurrency/limits.md)
 
+> **This document is a Phase 2 / 3 sketch.** The Phase 1 primitives
+> in the core package (Arena, Payload, CvInjector) are the only
+> design-frozen surface; everything described below is expected
+> to move as Phase 1 is implemented and measured. Specific
+> quantitative claims in this document (message sizes, bootstrap
+> costs, throughput) are target values pending measurement.
+
 This document covers only the parts that are specific to moving
 payloads between OS threads via `parallel\Runtime`.
 
 ## 1. What this package adds on top of `parallel`
 
-Raw `parallel\Channel::send()` serialises its argument with
-`igbinary_serialize` (or native serialisation if igbinary is
-unavailable). For large payloads this dominates. The satellite
-wraps `parallel\Channel` so that sending a `Payload` transmits
-only a small header (pointer + length + arena id), and receiving
+Raw `parallel\Channel::send()` serialises its argument through
+PHP's serialisation (igbinary if loaded, native otherwise). For
+large payloads that dominates wall time. The satellite wraps
+`parallel\Channel` so that sending a `Payload` transmits only a
+small header (pointer + length + arena id), and receiving
 materialises the payload by CV injection on the worker side.
 
 ```
@@ -49,10 +56,12 @@ struct handoff_msg {
 };
 ```
 
-`parallel\Channel` carries this by value; it is a handful of
-bytes and the cost of its serialisation is negligible.
+`parallel\Channel` carries this by value. The cost of its
+serialisation is expected to be negligible relative to the
+payload body handoff, but the margin is pending measurement in
+the Phase 1 PoC.
 
-## 2. Synchronous `Channel`
+## 2. Synchronous `Channel` (sketch)
 
 Phase 2 entry-level API. Wraps a `parallel\Channel` with
 payload-aware send and receive:
@@ -64,7 +73,8 @@ $ch = Channel::open('jobs');
 
 // producer
 /**
- * @param-out Payload<Drained> $p
+ * @param        Payload<Fresh>   $p
+ * @param-out    Payload<Drained> $p
  */
 $ch->send(Payload $p): void;
 
@@ -74,21 +84,31 @@ $ch->recvInto(string $cvName): void;
 
 Under the hood:
 
-1. `send()` calls `$payload->take()` which drains the handle,
-   returning a raw pointer. Aliasing check runs here.
+1. `send()` calls `$payload->take()` which drains the handle
+   and returns a raw pointer. `take()` runs the consumed-state
+   check (`ptr === null` -> `ConsumedPayloadException`); it does
+   not attempt runtime aliasing detection (see core
+   `safety.md` \u00a72.3).
 2. The pointer is packed into the `handoff_msg` struct and sent
    through the underlying `parallel\Channel`.
 3. On the receiving side, the struct arrives, and the
    `CvInjector` writes a `zend_string*` zval into the CV named
-   `$cvName` in the caller's frame.
-4. Receiver's CV dtor fires on scope exit, `pefree` releases
+   `$cvName` in the caller's frame. The caller of `recvInto`
+   must be the direct synchronous owner of that CV -- see core
+   `api.md` \u00a72.5 for the applicability constraint and the
+   alternative Injectors for non-synchronous receive.
+4. Receiver's CV dtor fires on scope exit; `pefree` releases
    the persistent zstr.
 
 `Channel` is the default for the common case where the consumer
 blocks on receipt until something arrives. It integrates cleanly
 with existing `parallel` code that expects blocking channels.
 
-## 3. `AsyncChannel`
+Open: send-side backpressure policy (block / error / drop) is
+not fixed by this sketch; the dedicated `BACKPRESSURE.md`
+companion in the core package is where it will be nailed down.
+
+## 3. `AsyncChannel` (sketch)
 
 Phase 2 second half. Same send / receive semantics, but exposes
 an `fd()` so receivers running inside an event loop can wait on
@@ -108,7 +128,15 @@ EventLoop::onReadable($ch->fd(), function () use ($ch) {
 });
 ```
 
-Implementation:
+The inner `process($buf)` body runs in a deferred callback, so
+`tryRecvInto` here uses an alternative Injector (static
+property or holder object) rather than CV injection. See the
+core `payload.md` \u00a74.1 -- the `while` loop above is
+intentionally structured to keep the injection synchronous by
+doing the inject inside `onReadable`'s callback and then
+queuing the processing separately.
+
+Implementation sketch:
 
 - **Linux:** `eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK)` created per
   channel, shared across threads. `send()` increments the
@@ -128,14 +156,15 @@ phase if profiling motivates it).
 ### 3.1 Integration with an external reactor
 
 If the PHP ecosystem standardises a reactor C API (for instance
-via an adjacent RFC; we track these but do not depend on them),
-a `LibUvAsyncChannel` or similar adapter can be added that
-registers the channel's `uv_async_t` with the shared reactor
-directly. The user-visible `AsyncChannel` interface stays
-stable; only the implementation switches. See the core package's
-`docs/concurrency/limits.md` §3.2 for context.
+via an adjacent RFC; we track these peripherally but do not
+depend on any specific proposal landing), a `LibUvAsyncChannel`
+or similar adapter can be added that registers the channel's
+`uv_async_t` with the shared reactor directly. The user-visible
+`AsyncChannel` interface stays stable; only the implementation
+switches. See the core package's `limits.md` \u00a73.2 for
+context.
 
-## 4. `Pool`
+## 4. `Pool` (sketch)
 
 A long-lived set of `parallel\Runtime` workers reused across
 tasks:
@@ -157,20 +186,29 @@ $pool->shutdown();                  // drains, then joins
 
 Design points:
 
-- Runtimes are created on first `submit()` up to the pool size.
+- Runtimes are created lazily on first `submit()` up to the
+  pool size. An eager-start mode is likely needed for
+  latency-sensitive callers (open question, \u00a79).
 - Each worker runs an internal dispatch loop that receives
   tasks via the pool's private `Channel`.
 - `bindings` are applied to the worker's task closure via
   CV injection immediately before the closure runs.
 - `submit()` returns a `Future`; `get()` blocks, `tryGet()` is
   non-blocking, `cancel()` sets a cooperative cancellation
-  flag the task can observe.
+  flag the task can observe. `cancel()` does not preempt
+  running code -- see core `limits.md` \u00a72.1.
 
 `Pool` is the substrate for the structured combinators in
 Phase 3 -- those functions do not create Runtimes directly,
 they submit to a pool.
 
-## 5. Structured combinators
+`Pool::shutdown()` drains the pending queue and joins the
+workers. Because `parallel\Runtime` destruction will execute
+any scheduled-but-unstarted tasks before the runtime exits,
+shutdown semantics need careful sequencing; the precise
+ordering is pending the Phase 2 implementation.
+
+## 5. Structured combinators (sketch)
 
 Phase 3. All layer on `Pool` + `Future`:
 
@@ -195,24 +233,32 @@ Structured::forEach(
 );
 ```
 
-Semantics:
+Intended semantics (subject to the cancellation story in
+`ERROR_MODEL.md`):
 
 - `all` -- runs all, waits for all, propagates the first
-  exception (cancelling the remaining).
-- `race` -- runs all, returns first success, cancels the rest.
-- `forEach` -- streams items through a bounded pool; back-
-  pressure honoured.
+  exception. Remaining tasks are **cooperatively** cancelled --
+  the cancellation flag is set but running tasks must reach a
+  check point to stop. Tasks inside internal functions are not
+  interruptable.
+- `race` -- runs all, returns first success, cooperatively
+  cancels the rest under the same caveat.
+- `forEach` -- streams items through a bounded pool. Backpressure
+  policy is pending `BACKPRESSURE.md`.
 
 All three install a cancellation propagation scope. If the
 caller abandons the result (exception above the call site),
-unfinished tasks are cancelled cooperatively.
+unfinished tasks are cancelled cooperatively. Users who need
+a hard deadline should combine this with a timer that calls
+`Runtime::kill()` explicitly -- which is not a clean abort,
+but is the strongest stop available.
 
 The combinator vocabulary mirrors what is familiar from other
 runtimes (Go `errgroup`, JS `Promise.all` / `race`, Kotlin
 `coroutineScope`). Users carry mental models across ecosystems
 without relearning names.
 
-## 6. Atomics
+## 6. Atomics (sketch)
 
 Phase 2. Thin FFI wrappers over C atomic intrinsics, used
 internally by `Pool` (for task counts, shutdown signalling) and
@@ -262,15 +308,15 @@ extra layer users opt into when they need to avoid
 
 ## 8. Phase delivery ordering in this package
 
-| Phase | Deliverable |
-| --- | --- |
-| 2.1 | `Channel` (sync, payload-aware, wraps `parallel\Channel`) |
-| 2.2 | `Atomic` primitives (int32, int64, bool) |
-| 2.3 | `Pool` + `Future` |
-| 2.4 | `AsyncChannel` (eventfd / pipe fallback) |
-| 3.1 | `Structured::all` / `race` / `forEach` |
-| 3.2 | Cancellation scope + cooperative-cancel helpers |
-| Later | MPMC lock-free queue, shared mmap buffer, broadcast channel |
+| Phase | Deliverable | Status |
+| --- | --- | --- |
+| 2.1 | `Channel` (sync, payload-aware, wraps `parallel\Channel`) | *sketch* |
+| 2.2 | `Atomic` primitives (int32, int64, bool) | *sketch* |
+| 2.3 | `Pool` + `Future` | *sketch* |
+| 2.4 | `AsyncChannel` (eventfd / pipe fallback) | *sketch* |
+| 3.1 | `Structured::all` / `race` / `forEach` | *sketch* |
+| 3.2 | Cancellation scope + cooperative-cancel helpers | *sketch* |
+| Later | MPMC lock-free queue, shared mmap buffer, broadcast channel | *sketch* |
 
 Phase 4 / 5 (immutable array and object-graph codecs) live in
 the core package. The satellite's `Channel` accepts whatever the
@@ -279,9 +325,11 @@ changes are required for those phases.
 
 ## 9. Open questions specific to this package
 
-- **Pool bootstrapping cost.** Creating 8 `parallel\Runtime`s
-  costs ~40-120 ms on current hardware. Worth an eager-start
-  option for latency-sensitive applications.
+- **Pool bootstrapping cost.** Creating N `parallel\Runtime`s
+  pays a one-time cost per runtime (TSRM alloc, opcache init,
+  user-land bootstrap). The magnitude on current hardware is
+  pending measurement; an eager-start option likely matters for
+  latency-sensitive callers either way.
 - **Channel naming vs anonymous channels.** `parallel\Channel`
   supports named channels for cross-Runtime discovery. Our
   wrapper surfaces both; needs documentation on when to use
@@ -292,4 +340,10 @@ changes are required for those phases.
   user demand.
 - **Timeouts.** `Future::getWithTimeout(int $ms)` vs
   `Structured::all([...], timeout: ...)` -- pick one and apply
-  uniformly.
+  uniformly. The `ERROR_MODEL.md` companion is where this will
+  be decided.
+- **Worker-crash handling.** A `parallel\Runtime` thread that
+  hits a fatal error takes the process down with it. Pool-level
+  mitigation (restart policy, poison-pill detection) is
+  tractable but needs its own design before the Pool API can
+  commit to it.
