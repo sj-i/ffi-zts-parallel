@@ -1,0 +1,41 @@
+{
+    "name": "sj-i/ffi-zts-parallel",
+    "description": "PHP-side wrapper around pecl/parallel for use through sj-i/ffi-zts (NTS host -> embedded ZTS interpreter -> real OS threads).",
+    "type": "library",
+    "license": "MIT",
+    "keywords": ["ffi-zts", "parallel", "threads", "zts"],
+    "authors": [
+        {"name": "sj-i"}
+    ],
+    "require": {
+        "php": ">=8.4,<8.5",
+        "ext-ffi": "*",
+        "sj-i/ffi-zts": "^1.0"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^11.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "SjI\\FfiZts\\Parallel\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "SjI\\FfiZts\\Parallel\\Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "post-install-cmd": "SjI\\FfiZts\\Parallel\\Installer::fetchBinaries",
+        "post-update-cmd":  "SjI\\FfiZts\\Parallel\\Installer::fetchBinaries"
+    },
+    "extra": {
+        "ffi-zts-parallel": {
+            "parallel-version": "1.2.12",
+            "release-asset-format": "parallel-{parallel}-php{phpabi}-{arch}-{libc}.tar.gz"
+        }
+    },
+    "config": {
+        "sort-packages": true
+    }
+}
