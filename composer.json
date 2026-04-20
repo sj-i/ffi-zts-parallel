@@ -1,18 +1,20 @@
 {
     "name": "sj-i/ffi-zts-parallel",
     "description": "PHP-side wrapper around pecl/parallel for use through sj-i/ffi-zts (NTS host -> embedded ZTS interpreter -> real OS threads).",
-    "type": "library",
+    "type": "composer-plugin",
     "license": "MIT",
-    "keywords": ["ffi-zts", "parallel", "threads", "zts"],
+    "keywords": ["ffi-zts", "parallel", "threads", "zts", "composer-plugin"],
     "authors": [
         {"name": "sj-i"}
     ],
     "require": {
         "php": ">=8.4,<8.5",
+        "composer-plugin-api": "^2.0",
         "ext-ffi": "*",
-        "sj-i/ffi-zts": "^1.0"
+        "sj-i/ffi-zts": "^1.1"
     },
     "require-dev": {
+        "composer/composer": "^2.0",
         "phpunit/phpunit": "^11.0"
     },
     "autoload": {
@@ -25,17 +27,18 @@
             "SjI\\FfiZts\\Parallel\\Tests\\": "tests/"
         }
     },
-    "scripts": {
-        "post-install-cmd": "SjI\\FfiZts\\Parallel\\Installer::fetchBinaries",
-        "post-update-cmd":  "SjI\\FfiZts\\Parallel\\Installer::fetchBinaries"
-    },
     "extra": {
+        "class": "SjI\\FfiZts\\Parallel\\ComposerPlugin",
         "ffi-zts-parallel": {
             "parallel-version": "1.2.12",
             "release-asset-format": "parallel-{parallel}-php{phpabi}-{arch}-{libc}.tar.gz"
         }
     },
     "config": {
-        "sort-packages": true
+        "sort-packages": true,
+        "allow-plugins": {
+            "sj-i/ffi-zts": true,
+            "sj-i/ffi-zts-parallel": true
+        }
     }
 }

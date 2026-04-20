@@ -7,14 +7,19 @@ use SjI\FfiZts\Platform;
 use SjI\FfiZts\Exception\InstallException;
 
 /**
- * Composer post-install hook for the parallel binary.
+ * Fetches the per-host parallel.so artefact into
+ * vendor/sj-i/ffi-zts-parallel/bin/.
  *
- * Mirrors SjI\FfiZts\Installer but for parallel.so. Two artefacts
- * may be present in the release tarball, per docs/DESIGN.md §5.3:
- *   - extensions/no-debug-zts-<api>/parallel.so  (vanilla, for
- *     native ZTS CLI use; we keep it for forensic/debug reasons)
- *   - extensions/ffi-zts/parallel.so             (FFI-linked, what
- *     the embed actually uses)
+ * Normally invoked from SjI\FfiZts\Parallel\ComposerPlugin in
+ * response to POST_PACKAGE_INSTALL / POST_PACKAGE_UPDATE. Also
+ * callable directly for manual retries.
+ *
+ * Two artefacts may be present in the release tarball per
+ * docs/DESIGN.md §5.3:
+ *   - extensions/no-debug-zts-<api>/parallel.so  (vanilla, native
+ *     ZTS CLI use; kept for forensic/debug reasons)
+ *   - extensions/ffi-zts/parallel.so             (FFI-linked,
+ *     what the embed actually uses)
  *
  * If the release ships only the vanilla variant, the runtime ELF
  * patcher in Parallel::boot() will produce the linked variant on
@@ -32,7 +37,7 @@ final class Installer
         $marker = $binDir . '/parallel.so';
         $linked = $binDir . '/extensions/ffi-zts/parallel.so';
         if (is_file($marker) || is_file($linked)) {
-            self::log($event, "ffi-zts-parallel: parallel.so already present");
+            self::log($event, 'ffi-zts-parallel: parallel.so already present');
             return;
         }
 
@@ -46,13 +51,29 @@ final class Installer
             throw new InstallException("unable to download release asset: {$url}");
         }
 
-        $tmp = tempnam(sys_get_temp_dir(), 'ffi-zts-parallel-');
-        @file_put_contents($tmp, $bytes);
+        // PharData detects archive format by extension; tempnam()
+        // returns a bare path, so stage as `<tmp>.tar.gz`.
+        $tmpBase = tempnam(sys_get_temp_dir(), 'ffi-zts-parallel-');
+        if ($tmpBase === false) {
+            throw new InstallException('unable to allocate temp file for release archive');
+        }
+        $tmp = $tmpBase . '.tar.gz';
+        if (!@rename($tmpBase, $tmp)) {
+            @unlink($tmpBase);
+            throw new InstallException("unable to stage release archive at {$tmp}");
+        }
+        if (@file_put_contents($tmp, $bytes) === false) {
+            @unlink($tmp);
+            throw new InstallException("unable to write release archive to {$tmp}");
+        }
         try {
             $phar = new \PharData($tmp);
             $phar->extractTo($binDir, null, true);
         } catch (\Throwable $e) {
-            throw new InstallException('unable to extract parallel release archive: ' . $e->getMessage(), previous: $e);
+            throw new InstallException(
+                'unable to extract parallel release archive: ' . $e->getMessage(),
+                previous: $e,
+            );
         } finally {
             @unlink($tmp);
         }
